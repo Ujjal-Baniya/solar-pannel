@@ -329,3 +329,317 @@ class Model3D {
             
             // Convert panel position to 3D coordinates
             const localPos = this.convertToLocalCoords([panel.position])[0];
+            
+            // Position panel on roof surface
+            const roofHeight = 8 + this.getRoofHeightAtPosition(localPos, roofData);
+            panelMesh.position.set(localPos.x, roofHeight + 0.1, localPos.z);
+            
+            // Apply tilt based on roof pitch
+            const pitchRadians = (roofData.pitch || 30) * Math.PI / 180;
+            panelMesh.rotation.x = pitchRadians;
+            
+            // Apply azimuth rotation
+            const azimuthRadians = (panel.azimuth || 0) * Math.PI / 180;
+            panelMesh.rotation.y = azimuthRadians;
+            
+            // Store panel data for interaction
+            panelMesh.userData = {
+                panelId: panel.id,
+                selected: false,
+                power: panel.power,
+                efficiency: panel.efficiency
+            };
+            
+            panelMesh.castShadow = true;
+            panelMesh.receiveShadow = true;
+            
+            this.panelsGroup.add(panelMesh);
+        });
+    }
+
+    getRoofHeightAtPosition(position, roofData) {
+        // Simplified roof height calculation
+        // In a real implementation, this would calculate the exact height based on roof geometry
+        return 2; // Assume 2 feet above house base
+    }
+
+    convertToLocalCoords(geoCoords) {
+        if (!geoCoords || geoCoords.length === 0) return [];
+        
+        // Find bounds to center the model
+        let minLat = geoCoords[0].lat, maxLat = geoCoords[0].lat;
+        let minLng = geoCoords[0].lng, maxLng = geoCoords[0].lng;
+        
+        geoCoords.forEach(coord => {
+            minLat = Math.min(minLat, coord.lat);
+            maxLat = Math.max(maxLat, coord.lat);
+            minLng = Math.min(minLng, coord.lng);
+            maxLng = Math.max(maxLng, coord.lng);
+        });
+        
+        const centerLat = (minLat + maxLat) / 2;
+        const centerLng = (minLng + maxLng) / 2;
+        
+        // Convert to local coordinates (simplified)
+        const scale = 100000; // Scale factor for lat/lng to meters conversion
+        
+        return geoCoords.map(coord => ({
+            x: (coord.lng - centerLng) * scale,
+            z: -(coord.lat - centerLat) * scale // Negative Z for proper orientation
+        }));
+    }
+
+    calculateCenter(coords) {
+        let centerX = 0, centerZ = 0;
+        coords.forEach(coord => {
+            centerX += coord.x;
+            centerZ += coord.z;
+        });
+        return {
+            x: centerX / coords.length,
+            z: centerZ / coords.length
+        };
+    }
+
+    positionCamera(roofData) {
+        // Calculate optimal camera position based on roof bounds
+        const coords = this.convertToLocalCoords(roofData.coordinates);
+        const bounds = this.calculateBounds3D(coords);
+        
+        const size = Math.max(bounds.width, bounds.depth);
+        const distance = size * 1.5;
+        
+        this.camera.position.set(distance, distance * 0.8, distance);
+        this.camera.lookAt(bounds.center.x, 0, bounds.center.z);
+    }
+
+    calculateBounds3D(coords) {
+        let minX = coords[0].x, maxX = coords[0].x;
+        let minZ = coords[0].z, maxZ = coords[0].z;
+        
+        coords.forEach(coord => {
+            minX = Math.min(minX, coord.x);
+            maxX = Math.max(maxX, coord.x);
+            minZ = Math.min(minZ, coord.z);
+            maxZ = Math.max(maxZ, coord.z);
+        });
+        
+        return {
+            center: { x: (minX + maxX) / 2, z: (minZ + maxZ) / 2 },
+            width: maxX - minX,
+            depth: maxZ - minZ
+        };
+    }
+
+    toggleView() {
+        if (this.currentView === 'perspective') {
+            this.switchToOrthographic();
+        } else {
+            this.switchToPerspective();
+        }
+    }
+
+    switchToPerspective() {
+        const container = document.getElementById('canvas3d');
+        this.camera = new THREE.PerspectiveCamera(
+            75,
+            container.clientWidth / container.clientHeight,
+            0.1,
+            1000
+        );
+        this.camera.position.set(20, 30, 20);
+        this.camera.lookAt(0, 0, 0);
+        this.currentView = 'perspective';
+    }
+
+    switchToOrthographic() {
+        const container = document.getElementById('canvas3d');
+        const aspect = container.clientWidth / container.clientHeight;
+        const viewSize = 30;
+        
+        this.camera = new THREE.OrthographicCamera(
+            -viewSize * aspect, viewSize * aspect,
+            viewSize, -viewSize,
+            0.1, 1000
+        );
+        this.camera.position.set(0, 50, 0);
+        this.camera.lookAt(0, 0, 0);
+        this.currentView = 'orthographic';
+    }
+
+    clearModel() {
+        // Clear all groups
+        this.clearGroup(this.houseGroup);
+        this.clearGroup(this.roofGroup);
+        this.clearGroup(this.panelsGroup);
+        this.selectedPanels = [];
+    }
+
+    clearGroup(group) {
+        if (!group) return;
+        
+        while (group.children.length > 0) {
+            const child = group.children[0];
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) child.material.dispose();
+            group.remove(child);
+        }
+    }
+
+    clearPanels() {
+        this.clearGroup(this.panelsGroup);
+        this.selectedPanels = [];
+    }
+
+    animate() {
+        requestAnimationFrame(() => this.animate());
+        
+        if (this.renderer && this.scene && this.camera) {
+            this.renderer.render(this.scene, this.camera);
+        }
+    }
+
+    // Utility methods
+    showLoading(elementId) {
+        const loading = document.getElementById(elementId);
+        if (loading) {
+            loading.classList.add('active');
+        }
+    }
+
+    hideLoading(elementId) {
+        const loading = document.getElementById(elementId);
+        if (loading) {
+            loading.classList.remove('active');
+        }
+    }
+
+    // Export methods
+    exportScene() {
+        if (!this.scene) return null;
+        
+        return {
+            houseVertices: this.extractGroupVertices(this.houseGroup),
+            roofVertices: this.extractGroupVertices(this.roofGroup),
+            panelData: this.extractPanelData()
+        };
+    }
+
+    extractGroupVertices(group) {
+        const vertices = [];
+        group.children.forEach(child => {
+            if (child.geometry) {
+                const position = child.geometry.attributes.position;
+                if (position) {
+                    for (let i = 0; i < position.count; i++) {
+                        vertices.push({
+                            x: position.getX(i),
+                            y: position.getY(i),
+                            z: position.getZ(i)
+                        });
+                    }
+                }
+            }
+        });
+        return vertices;
+    }
+
+    extractPanelData() {
+        return this.panelsGroup.children.map(panel => ({
+            id: panel.userData.panelId,
+            position: {
+                x: panel.position.x,
+                y: panel.position.y,
+                z: panel.position.z
+            },
+            rotation: {
+                x: panel.rotation.x,
+                y: panel.rotation.y,
+                z: panel.rotation.z
+            },
+            power: panel.userData.power,
+            efficiency: panel.userData.efficiency,
+            selected: panel.userData.selected
+        }));
+    }
+
+    // Screenshot/render methods
+    captureScreenshot() {
+        if (!this.renderer) return null;
+        
+        this.renderer.render(this.scene, this.camera);
+        return this.renderer.domElement.toDataURL('image/png');
+    }
+
+    // Panel management in 3D view
+    selectAllPanels3D() {
+        this.panelsGroup.children.forEach(panel => {
+            panel.material.color.setHex(0xfbbf24); // Yellow
+            panel.userData.selected = true;
+        });
+        this.selectedPanels = [...this.panelsGroup.children];
+    }
+
+    deselectAllPanels3D() {
+        this.panelsGroup.children.forEach(panel => {
+            panel.material.color.setHex(0x1e40af); // Blue
+            panel.userData.selected = false;
+        });
+        this.selectedPanels = [];
+    }
+
+    deleteSelectedPanels3D() {
+        this.selectedPanels.forEach(panel => {
+            if (panel.geometry) panel.geometry.dispose();
+            if (panel.material) panel.material.dispose();
+            this.panelsGroup.remove(panel);
+        });
+        this.selectedPanels = [];
+        
+        // Notify panel placer to update its data
+        if (window.panelPlacer) {
+            window.panelPlacer.deleteSelectedPanels();
+        }
+    }
+
+    // Lighting controls
+    adjustLighting(intensity, azimuth, elevation) {
+        // Find the sun light (directional light)
+        const sunLight = this.scene.children.find(child => 
+            child instanceof THREE.DirectionalLight && child.intensity > 0.5
+        );
+        
+        if (sunLight) {
+            sunLight.intensity = intensity;
+            
+            // Update position based on azimuth and elevation
+            const distance = 100;
+            const x = distance * Math.cos(elevation) * Math.sin(azimuth);
+            const y = distance * Math.sin(elevation);
+            const z = distance * Math.cos(elevation) * Math.cos(azimuth);
+            
+            sunLight.position.set(x, y, z);
+        }
+    }
+
+    // Performance optimization
+    setLevelOfDetail(enabled) {
+        // Simple LOD implementation
+        this.panelsGroup.children.forEach(panel => {
+            if (enabled) {
+                // Use simpler geometry for distant panels
+                const distance = this.camera.position.distanceTo(panel.position);
+                if (distance > 50) {
+                    panel.visible = false;
+                } else {
+                    panel.visible = true;
+                }
+            } else {
+                panel.visible = true;
+            }
+        });
+    }
+}
+
+// Global instance
+window.model3D = new Model3D();
